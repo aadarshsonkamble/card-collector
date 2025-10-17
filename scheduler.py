@@ -5,6 +5,7 @@ import time as time_module
 from datetime import datetime
 from dotenv import load_dotenv
 from supabase import create_client
+from aiohttp import web
 
 # Load environment variables
 load_dotenv()
@@ -136,7 +137,28 @@ def keep_alive():
     """Periodic ping to prevent spin-down"""
     print(f"💓 Keep-alive ping at {datetime.now().strftime('%I:%M:%S %p')}")
 
-def main():
+# HTTP server for Render
+async def health_check(request):
+    """Health check endpoint for Render"""
+    progress = get_current_batch()
+    status = {
+        'status': 'running',
+        'mode': 'initial' if progress['initial_mode'] else 'maintenance',
+        'current_batch': progress['current_batch'],
+        'total_batches': progress['total_batches'],
+        'last_run': progress.get('last_run', 'Never'),
+        'next_runs': ['10:00 AM IST (4:30 AM UTC)', '10:00 PM IST (4:30 PM UTC)']
+    }
+    return web.json_response(status)
+
+async def run_scheduler_loop():
+    """Run the scheduler in background"""
+    while True:
+        schedule.run_pending()
+        await asyncio.sleep(60)
+
+async def start_services():
+    """Start both HTTP server and scheduler"""
     print("=" * 70)
     print("🚀 FC MOBILE CARD SCRAPER - SCHEDULER")
     print("=" * 70)
@@ -157,25 +179,33 @@ def main():
     print(f"\n⏰ Schedule:")
     print(f"   Session 1: 10:00 AM IST (4:30 AM UTC)")
     print(f"   Session 2: 10:00 PM IST (4:30 PM UTC)")
-    print(f"\n💡 Press Ctrl+C to stop\n")
     
-    # Schedule jobs - 10 AM IST = 4:30 AM UTC, 10 PM IST = 4:30 PM UTC
-    schedule.every().day.at("04:30").do(scheduled_job)  # 10 AM IST
-    schedule.every().day.at("16:30").do(scheduled_job)  # 10 PM IST
-    
-    # Keep-alive ping every 10 minutes to prevent Render spin-down
+    # Schedule jobs
+    schedule.every().day.at("04:30").do(scheduled_job)
+    schedule.every().day.at("16:30").do(scheduled_job)
     schedule.every(10).minutes.do(keep_alive)
     
-    print("✅ Scheduler initialized! Waiting for scheduled times...\n")
+    print(f"\n✅ Scheduler initialized! Waiting for scheduled times...")
     
-    # Keep running
-    while True:
-        schedule.run_pending()
-        time_module.sleep(60)  # Check every minute
+    # Start HTTP server
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    port = int(os.environ.get('PORT', 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 HTTP server running on port {port}")
+    print(f"💡 Health check: http://localhost:{port}/health\n")
+    
+    # Run scheduler loop
+    await run_scheduler_loop()
 
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(start_services())
     except KeyboardInterrupt:
         print("\n\n🛑 Scheduler stopped by user")
     except Exception as e:

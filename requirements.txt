@@ -3,3 +3,4 @@ python-dotenv>=1.0.0
 supabase>=2.0.0
 playwright>=1.40.0
 schedule>=1.2.0
+aiohttp>=3.9.0

@@ -26,10 +26,10 @@ UPLOAD_CHANNEL_ID = int(os.getenv('UPLOAD_CHANNEL_ID'))
 # Scraping settings - OPTIMIZED
 PARALLEL_BROWSERS = 2
 RANKS = [0, 1, 2, 3, 4, 5]
-PAGE_TIMEOUT = 30000  # 30 seconds (reduced from 90)
-SELECTOR_TIMEOUT = 15000  # 15 seconds
-SCREENSHOT_TIMEOUT = 10000  # 10 seconds
-WAIT_AFTER_LOAD = 5  # seconds (reduced from 8)
+PAGE_TIMEOUT = 90000  # 30 seconds (reduced from 90)
+SELECTOR_TIMEOUT = 90000  # 15 seconds
+SCREENSHOT_TIMEOUT = 30000  # 10 seconds
+WAIT_AFTER_LOAD = 20  # seconds (reduced from 8)
 
 # Global state
 stop_flag = False
@@ -497,3 +497,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

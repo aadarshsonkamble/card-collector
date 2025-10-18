@@ -1,4 +1,6 @@
+print("🔍 DEBUG: Scheduler starting...", flush=True)
 import os
+print("🔍 DEBUG: Imports starting...", flush=True)
 import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
@@ -204,3 +206,4 @@ if __name__ == "__main__":
         print(f"\n❌ Server error: {e}")
         import traceback
         traceback.print_exc()
+

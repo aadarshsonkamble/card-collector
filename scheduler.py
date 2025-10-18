@@ -1,7 +1,5 @@
 import os
 import asyncio
-import schedule
-import time as time_module
 from datetime import datetime
 from dotenv import load_dotenv
 from supabase import create_client
@@ -21,27 +19,16 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Progress tracking
 PROGRESS_TABLE = 'card_scraper_progress'
 
+# Track if scraper is currently running
+scraper_running = False
+
 def init_progress_table():
     """Create progress tracking table if it doesn't exist"""
     try:
-        # Check if table exists by trying to query it
         supabase.table(PROGRESS_TABLE).select('*').limit(1).execute()
         print("✅ Progress table exists")
     except Exception as e:
-        print(f"⚠️ Progress table may not exist. Please create it manually:")
-        print(f"""
-        CREATE TABLE {PROGRESS_TABLE} (
-            id SERIAL PRIMARY KEY,
-            current_batch INTEGER DEFAULT 1,
-            total_batches INTEGER DEFAULT 10,
-            initial_mode BOOLEAN DEFAULT true,
-            last_run TIMESTAMPTZ,
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        );
-        
-        INSERT INTO {PROGRESS_TABLE} (current_batch, total_batches, initial_mode)
-        VALUES (1, 10, true);
-        """)
+        print(f"⚠️ Progress table may not exist. Create it in Supabase")
 
 def get_current_batch():
     """Get current batch number from database"""
@@ -50,7 +37,6 @@ def get_current_batch():
         if result.data:
             return result.data[0]
         else:
-            # Initialize if empty
             supabase.table(PROGRESS_TABLE).insert({
                 'current_batch': 1,
                 'total_batches': 10,
@@ -74,26 +60,31 @@ def update_batch(batch_num, initial_mode=True):
     except Exception as e:
         print(f"❌ Error updating batch: {e}")
 
-async def run_scraper(batch_num=None):
+async def run_scraper():
     """Run the card scraper"""
-    print("=" * 70)
-    print(f"🎴 Starting Card Scraper")
-    print(f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p IST')}")
-    print("=" * 70)
+    global scraper_running
     
-    # Get current progress
-    progress = get_current_batch()
-    current_batch = progress['current_batch']
-    total_batches = progress['total_batches']
-    initial_mode = progress['initial_mode']
+    if scraper_running:
+        print("⚠️ Scraper already running, skipping...")
+        return {"status": "already_running"}
     
-    if batch_num:
-        current_batch = batch_num
-    
-    # Import here to avoid circular imports
-    import card_image
+    scraper_running = True
     
     try:
+        print("=" * 70)
+        print(f"🎴 Starting Card Scraper")
+        print(f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p IST')}")
+        print("=" * 70)
+        
+        # Get current progress
+        progress = get_current_batch()
+        current_batch = progress['current_batch']
+        total_batches = progress['total_batches']
+        initial_mode = progress['initial_mode']
+        
+        # Import here to avoid circular imports
+        import card_image
+        
         if initial_mode:
             print(f"📦 Initial Mode - Processing Batch {current_batch}/{total_batches}")
             print(f"📊 Players: {(current_batch-1)*BATCH_SIZE + 1} to {current_batch*BATCH_SIZE}")
@@ -113,54 +104,59 @@ async def run_scraper(batch_num=None):
             else:
                 update_batch(next_batch, initial_mode=True)
                 print(f"✅ Batch {current_batch} complete! Next: Batch {next_batch}")
+            
+            return {"status": "success", "batch": current_batch, "mode": "initial"}
         else:
             print("🔧 Maintenance Mode - Checking for new/missing cards")
             
-            # In maintenance mode, don't use batches - check all
+            # In maintenance mode, don't use batches
             os.environ.pop('BATCH_NUMBER', None)
             os.environ.pop('BATCH_SIZE', None)
             
             await card_image.main()
             print("✅ Maintenance check complete!")
+            
+            return {"status": "success", "mode": "maintenance"}
         
     except Exception as e:
         print(f"❌ Scraper failed: {e}")
         import traceback
         traceback.print_exc()
+        return {"status": "error", "error": str(e)}
+    finally:
+        scraper_running = False
 
-def scheduled_job():
-    """Wrapper for scheduled runs"""
-    print(f"\n🔔 Scheduled run triggered at {datetime.now().strftime('%I:%M %p IST')}")
-    asyncio.run(run_scraper())
-
-def keep_alive():
-    """Periodic ping to prevent spin-down"""
-    print(f"💓 Keep-alive ping at {datetime.now().strftime('%I:%M:%S %p')}")
-
-# HTTP server for Render
+# HTTP endpoints
 async def health_check(request):
-    """Health check endpoint for Render"""
+    """Health check endpoint"""
     progress = get_current_batch()
     status = {
         'status': 'running',
+        'scraper_active': scraper_running,
         'mode': 'initial' if progress['initial_mode'] else 'maintenance',
         'current_batch': progress['current_batch'],
         'total_batches': progress['total_batches'],
-        'last_run': progress.get('last_run', 'Never'),
-        'next_runs': ['10:00 AM IST (4:30 AM UTC)', '10:00 PM IST (4:30 PM UTC)']
+        'last_run': progress.get('last_run', 'Never')
     }
     return web.json_response(status)
 
-async def run_scheduler_loop():
-    """Run the scheduler in background"""
-    while True:
-        schedule.run_pending()
-        await asyncio.sleep(60)
+async def trigger_scrape(request):
+    """Endpoint to trigger scraping"""
+    print(f"\n🔔 Scrape triggered at {datetime.now().strftime('%I:%M %p IST')}")
+    
+    # Run scraper in background
+    asyncio.create_task(run_scraper())
+    
+    return web.json_response({
+        "status": "triggered",
+        "message": "Scraper started in background",
+        "timestamp": datetime.now().isoformat()
+    })
 
-async def start_services():
-    """Start both HTTP server and scheduler"""
+async def start_server():
+    """Start HTTP server"""
     print("=" * 70)
-    print("🚀 FC MOBILE CARD SCRAPER - SCHEDULER")
+    print("🚀 FC MOBILE CARD SCRAPER - ON-DEMAND")
     print("=" * 70)
     
     # Initialize progress tracking
@@ -171,44 +167,40 @@ async def start_services():
     if progress['initial_mode']:
         print(f"\n📊 Status: Initial Mode")
         print(f"📦 Current Batch: {progress['current_batch']}/{progress['total_batches']}")
-        print(f"📅 Estimated Completion: 5 days from start")
+        print(f"📅 Will complete in {10 - progress['current_batch'] + 1} runs")
     else:
         print(f"\n📊 Status: Maintenance Mode")
-        print(f"🔄 Automatically processing new/missing cards")
+        print(f"🔄 Ready to process new/missing cards")
     
-    print(f"\n⏰ Schedule:")
-    print(f"   Session 1: 10:00 AM IST (4:30 AM UTC)")
-    print(f"   Session 2: 10:00 PM IST (4:30 PM UTC)")
+    print(f"\n💡 Trigger scraping:")
+    print(f"   GET /scrape - Start scraper manually")
+    print(f"   GET /health - Check status")
     
-    # Schedule jobs
-    schedule.every().day.at("04:30").do(scheduled_job)
-    schedule.every().day.at("16:30").do(scheduled_job)
-    schedule.every(10).minutes.do(keep_alive)
-    
-    print(f"\n✅ Scheduler initialized! Waiting for scheduled times...")
-    
-    # Start HTTP server
+    # Create web app
     app = web.Application()
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
+    app.router.add_get('/scrape', trigger_scrape)
     
+    # Start server
     port = int(os.environ.get('PORT', 10000))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"🌐 HTTP server running on port {port}")
-    print(f"💡 Health check: http://localhost:{port}/health\n")
     
-    # Run scheduler loop
-    await run_scheduler_loop()
+    print(f"\n🌐 HTTP server running on port {port}")
+    print(f"✅ Ready to receive scrape triggers!\n")
+    
+    # Keep running forever
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(start_services())
+        asyncio.run(start_server())
     except KeyboardInterrupt:
-        print("\n\n🛑 Scheduler stopped by user")
+        print("\n\n🛑 Server stopped by user")
     except Exception as e:
-        print(f"\n❌ Scheduler error: {e}")
+        print(f"\n❌ Server error: {e}")
         import traceback
         traceback.print_exc()

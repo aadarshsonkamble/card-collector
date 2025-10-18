@@ -4,6 +4,7 @@ import json
 import signal
 import sys
 import io
+import subprocess
 from datetime import datetime
 from playwright.async_api import async_playwright
 import discord
@@ -292,6 +293,32 @@ async def worker(browser, player_queue, worker_id, total_players):
             continue
 
 
+def install_chromium():
+    """Install Chromium browser synchronously"""
+    print("📥 Installing Chromium browser (this will take 2-3 minutes)...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+        
+        if result.returncode == 0:
+            print("✅ Chromium installed successfully!")
+            return True
+        else:
+            print(f"❌ Failed to install Chromium:")
+            print(f"   {result.stderr}")
+            return False
+    except subprocess.TimeoutExpired:
+        print("❌ Chromium installation timed out")
+        return False
+    except Exception as e:
+        print(f"❌ Error installing Chromium: {e}")
+        return False
+
+
 async def main():
     global stop_flag, stats
     
@@ -337,7 +364,32 @@ async def main():
     
     # Start Playwright and create browsers
     async with async_playwright() as p:
-        print(f"🚀 Launching {PARALLEL_BROWSERS} browsers...")
+        print(f"🚀 Checking browser installation...")
+        
+        # Try to launch browser to check if installed
+        browser_installed = False
+        try:
+            test_browser = await p.chromium.launch(headless=True)
+            await test_browser.close()
+            browser_installed = True
+            print("✅ Chromium already installed")
+        except Exception as e:
+            if "Executable doesn't exist" in str(e):
+                print("⚠️ Chromium not found")
+                browser_installed = False
+            else:
+                print(f"❌ Unexpected error: {e}")
+                raise
+        
+        # Install if needed
+        if not browser_installed:
+            success = install_chromium()
+            if not success:
+                print("❌ Cannot proceed without browser")
+                await discord_client.close()
+                return
+        
+        print(f"\n🚀 Launching {PARALLEL_BROWSERS} browsers...")
         
         browsers = []
         for i in range(PARALLEL_BROWSERS):
